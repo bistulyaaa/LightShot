@@ -13,6 +13,8 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.compose.runtime.*
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
+import com.example.testandlearn01.presentation.ui.CameraScreen
+import com.example.testandlearn01.GalleryScreen
 import com.example.testandlearn01.ui.theme.TestAndLearn01Theme
 import com.google.common.util.concurrent.ListenableFuture
 import kotlinx.coroutines.launch

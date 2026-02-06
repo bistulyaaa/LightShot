@@ -77,6 +77,7 @@ fun CameraScreen(
 
     var imageCapture: ImageCapture? by remember { mutableStateOf(null) }
     var camera: Camera? by remember { mutableStateOf(null) }
+    var cameraProvider: ProcessCameraProvider? by remember { mutableStateOf(null) }
     var previewView: PreviewView? by remember { mutableStateOf(null) }
     
     var flashMode by remember { mutableIntStateOf(ImageCapture.FLASH_MODE_AUTO) }
@@ -104,7 +105,8 @@ fun CameraScreen(
         
         previewView?.let { view ->
             cameraProviderFuture.addListener({
-                val cameraProvider = cameraProviderFuture.get()
+                val provider = cameraProviderFuture.get()
+                cameraProvider = provider
                 val preview = Preview.Builder()
                     .setTargetAspectRatio(AspectRatio.RATIO_4_3)
                     .build().also {
@@ -119,8 +121,8 @@ fun CameraScreen(
                 val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
                 
                 try {
-                    cameraProvider.unbindAll()
-                    camera = cameraProvider.bindToLifecycle(
+                    provider.unbindAll()
+                    camera = provider.bindToLifecycle(
                         lifecycleOwner,
                         cameraSelector,
                         preview,
@@ -337,7 +339,34 @@ enum class CaptureMode {
 }
 
 fun checkRawSupport(context: Context, camera: Camera): Boolean {
-    return checkRawSupportWithCamera2(context, camera)
+    return try {
+        val cameraInfo = camera.cameraInfo
+        val isBackCamera = cameraInfo.cameraSelector?.lensFacing == CameraSelector.LENS_FACING_BACK
+        
+        if (!isBackCamera) {
+            return false
+        }
+        
+        val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+        val cameraIds = cameraManager.cameraIdList
+        
+        for (cameraId in cameraIds) {
+            val characteristics = cameraManager.getCameraCharacteristics(cameraId)
+            val facing = characteristics.get(android.hardware.camera2.CameraCharacteristics.LENS_FACING)
+            
+            if (facing == android.hardware.camera2.CameraMetadata.LENS_FACING_BACK) {
+                val capabilities = characteristics.get(android.hardware.camera2.CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)
+                val isRawSupported = capabilities?.contains(android.hardware.camera2.CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_RAW) == true
+                Log.d("Camera2Raw", "Camera $cameraId RAW support: $isRawSupported")
+                return isRawSupported
+            }
+        }
+        
+        false
+    } catch (e: Exception) {
+        Log.e("Camera2Raw", "Error checking RAW support", e)
+        false
+    }
 }
 
 fun captureJPEG(
@@ -751,10 +780,12 @@ fun captureRAWWithCamera2(
 ) {
     val manager = Camera2RawCaptureManager(context, cameraManager)
     val handlerThread = HandlerThread("RAWHandler")
-    handlerThread.start()
-    val handler = Handler(handlerThread.looper)
+    var rawReader: ImageReader? = null
     
     try {
+        handlerThread.start()
+        val handler = Handler(handlerThread.looper)
+        
         manager.startBackgroundThread()
         
         val characteristics = cameraManager.getCameraCharacteristics(cameraId)
@@ -764,12 +795,11 @@ fun captureRAWWithCamera2(
         if (rawSizes == null || rawSizes.isEmpty()) {
             Log.e("Camera2Raw", "No RAW sizes available")
             onComplete(false)
-            handlerThread.quitSafely()
             return
         }
         
         val rawSize = rawSizes[0]
-        val rawReader = ImageReader.newInstance(
+        rawReader = ImageReader.newInstance(
             rawSize.width,
             rawSize.height,
             ImageFormat.RAW_SENSOR,
@@ -798,7 +828,7 @@ fun captureRAWWithCamera2(
                         onComplete(false)
                     } finally {
                         rawImage?.close()
-                        rawReader.close()
+                        rawReader?.close()
                         manager.close()
                         handlerThread.quitSafely()
                     }
@@ -806,115 +836,114 @@ fun captureRAWWithCamera2(
             }
         }, handler)
         
-        manager.openCamera(cameraId, rawReader.surface, null) { camera ->
-            manager.createCaptureSession(listOf(rawReader.surface)) {
-                try {
-                    val aeCompRange = characteristics.get(
-                        android.hardware.camera2.CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE
-                    )
-                    val aeCompStep = characteristics.get(
-                        android.hardware.camera2.CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP
-                    )
-                    
-                    val isAeCompSupported = aeCompRange != null
-                    
-                    Log.d("Camera2Exposure", "AE补偿范围: $aeCompRange")
-                    Log.d("Camera2Exposure", "AE补偿步长: $aeCompStep")
-                    Log.d("Camera2Exposure", "支持AE补偿: $isAeCompSupported")
-                    
-                    val requestBuilder = camera.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
-                        addTarget(rawReader.surface)
-                        
-                        set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
-                        
-                        when (flashMode) {
-                            ImageCapture.FLASH_MODE_AUTO -> {
-                                set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON_AUTO_FLASH)
-                            }
-                            ImageCapture.FLASH_MODE_ON -> {
-                                set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_SINGLE)
-                            }
-                            ImageCapture.FLASH_MODE_OFF -> {
-                                set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_OFF)
-                            }
-                        }
-                        
-                        if (isAeCompSupported) {
-                            val evValue = exposureCompensation.coerceIn(aeCompRange!!.lower, aeCompRange!!.upper)
-                            set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, evValue)
-                            Log.d("Camera2Exposure", "设置曝光补偿: $evValue")
-                        }
-                        
-                        set(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_OFF)
-                        set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_OFF)
-                        
-                        set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
-                    }
-                    
-                    manager.captureSession?.capture(
-                        requestBuilder.build(),
-                        object : CameraCaptureSession.CaptureCallback() {
-                            override fun onCaptureCompleted(
-                                session: CameraCaptureSession,
-                                request: CaptureRequest,
-                                result: TotalCaptureResult
-                            ) {
-                                captureResult = result
-                                Log.d("Camera2RAW", "RAW捕获完成，曝光状态: ${result.get(CaptureResult.CONTROL_AE_STATE)}")
-                            }
-
-                            override fun onCaptureFailed(
-                                session: CameraCaptureSession,
-                                request: CaptureRequest,
-                                failure: android.hardware.camera2.CaptureFailure
-                            ) {
-                                Log.e("Camera2RAW", "RAW捕获失败")
-                            }
-                        },
-                        manager.backgroundHandler
-                    )
-                } catch (e: Exception) {
-                    Log.e("Camera2Exposure", "设置曝光失败", e)
+        try {
+            val cameraIds = cameraManager.cameraIdList
+            var backCameraId: String? = null
+            
+            for (cameraId in cameraIds) {
+                val characteristics = cameraManager.getCameraCharacteristics(cameraId)
+                val facing = characteristics.get(android.hardware.camera2.CameraCharacteristics.LENS_FACING)
+                if (facing == android.hardware.camera2.CameraMetadata.LENS_FACING_BACK) {
+                    backCameraId = cameraId
+                    break
                 }
             }
+            
+            if (backCameraId == null) {
+                Log.e("Camera2RAW", "未找到后置摄像头")
+                onComplete(false)
+                return
+            }
+            
+            manager.openCamera(backCameraId, rawReader.surface, null) { camera ->
+                manager.createCaptureSession(listOf(rawReader.surface)) {
+                    try {
+                        val aeCompRange = characteristics.get(
+                            android.hardware.camera2.CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE
+                        )
+                        val aeCompStep = characteristics.get(
+                            android.hardware.camera2.CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP
+                        )
+                        
+                        val isAeCompSupported = aeCompRange != null
+                        
+                        Log.d("Camera2Exposure", "AE补偿范围: $aeCompRange")
+                        Log.d("Camera2Exposure", "AE补偿步长: $aeCompStep")
+                        Log.d("Camera2Exposure", "支持AE补偿: $isAeCompSupported")
+                        
+                        val requestBuilder = camera.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
+                            addTarget(rawReader.surface)
+                            
+                            set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+                            
+                            when (flashMode) {
+                                ImageCapture.FLASH_MODE_AUTO -> {
+                                    set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON_AUTO_FLASH)
+                                }
+                                ImageCapture.FLASH_MODE_ON -> {
+                                    set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_SINGLE)
+                                }
+                                ImageCapture.FLASH_MODE_OFF -> {
+                                    set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_OFF)
+                                }
+                            }
+                            
+                            if (isAeCompSupported) {
+                                val evValue = exposureCompensation.coerceIn(aeCompRange!!.lower, aeCompRange!!.upper)
+                                set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, evValue)
+                                Log.d("Camera2Exposure", "设置曝光补偿: $evValue")
+                            }
+                            
+                            set(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_OFF)
+                            set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_OFF)
+                            
+                            set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
+                        }
+                        
+                        manager.captureSession?.capture(
+                            requestBuilder.build(),
+                            object : CameraCaptureSession.CaptureCallback() {
+                                override fun onCaptureCompleted(
+                                    session: CameraCaptureSession,
+                                    request: CaptureRequest,
+                                    result: TotalCaptureResult
+                                ) {
+                                    captureResult = result
+                                    Log.d("Camera2RAW", "RAW捕获完成，曝光状态: ${result.get(CaptureResult.CONTROL_AE_STATE)}")
+                                }
+
+                                override fun onCaptureFailed(
+                                    session: CameraCaptureSession,
+                                    request: CaptureRequest,
+                                    failure: android.hardware.camera2.CaptureFailure
+                                ) {
+                                    Log.e("Camera2RAW", "RAW捕获失败")
+                                }
+                            },
+                            manager.backgroundHandler
+                        )
+                    } catch (e: Exception) {
+                        Log.e("Camera2Exposure", "设置曝光失败", e)
+                        rawReader?.close()
+                        manager.close()
+                        handlerThread.quitSafely()
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("Camera2RAW", "无法获取Camera2相机实例", e)
+            rawReader?.close()
+            manager.close()
+            handlerThread.quitSafely()
+            onComplete(false)
         }
     } catch (e: Exception) {
         Log.e("Camera2RAW", "RAW捕获错误", e)
         onComplete(false)
-        handlerThread.quitSafely()
-    }
-}
-
-fun checkRawSupportWithCamera2(
-    context: Context,
-    camera: Camera
-): Boolean {
-    return try {
-        val cameraInfo = camera.cameraInfo
-        val isBackCamera = cameraInfo.cameraSelector?.lensFacing == CameraSelector.LENS_FACING_BACK
-        
-        if (!isBackCamera) {
-            return false
+    } finally {
+        if (rawReader == null) {
+            manager.close()
+            handlerThread.quitSafely()
         }
-        
-        val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
-        val cameraIds = cameraManager.cameraIdList
-        
-        for (cameraId in cameraIds) {
-            val characteristics = cameraManager.getCameraCharacteristics(cameraId)
-            val facing = characteristics.get(android.hardware.camera2.CameraCharacteristics.LENS_FACING)
-            
-            if (facing == android.hardware.camera2.CameraMetadata.LENS_FACING_BACK) {
-                val capabilities = characteristics.get(android.hardware.camera2.CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)
-                val isRawSupported = capabilities?.contains(android.hardware.camera2.CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_RAW) == true
-                Log.d("Camera2Raw", "Camera $cameraId RAW support: $isRawSupported")
-                return isRawSupported
-            }
-        }
-        
-        false
-    } catch (e: Exception) {
-        Log.e("Camera2Raw", "Error checking RAW support", e)
-        false
     }
 }
