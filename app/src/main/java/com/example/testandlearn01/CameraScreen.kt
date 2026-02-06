@@ -3,10 +3,23 @@ package com.example.testandlearn01
 import android.content.ContentValues
 import android.content.Context
 import android.content.SharedPreferences
+import android.graphics.ImageFormat
+import android.hardware.camera2.CameraAccessException
+import android.hardware.camera2.CameraCaptureSession
+import android.hardware.camera2.CameraDevice
+import android.hardware.camera2.CameraManager
+import android.hardware.camera2.CaptureRequest
+import android.hardware.camera2.CaptureResult
+import android.hardware.camera2.DngCreator
+import android.hardware.camera2.TotalCaptureResult
+import android.media.ImageReader
 import android.os.Build
+import android.os.Handler
+import android.os.HandlerThread
 import android.provider.MediaStore
 import android.util.Log
 import android.util.Size
+import android.view.Surface
 import android.widget.Toast
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
@@ -14,6 +27,7 @@ import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
+import androidx.camera.core.AspectRatio
  import androidx.camera.core.resolutionselector.ResolutionSelector
 import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
@@ -63,6 +77,7 @@ fun CameraScreen(
 
     var imageCapture: ImageCapture? by remember { mutableStateOf(null) }
     var camera: Camera? by remember { mutableStateOf(null) }
+    var previewView: PreviewView? by remember { mutableStateOf(null) }
     
     var flashMode by remember { mutableIntStateOf(ImageCapture.FLASH_MODE_AUTO) }
     var exposureCompensation by remember { mutableFloatStateOf(0f) }
@@ -80,25 +95,60 @@ fun CameraScreen(
 
     LaunchedEffect(camera) {
         camera?.let { cam ->
-            isRawSupported = checkRawSupport(cam)
+            isRawSupported = checkRawSupport(context, cam)
         }
     }
 
     LaunchedEffect(captureMode) {
         sharedPreferences.edit().putString("captureMode", captureMode.name).apply()
+        
+        previewView?.let { view ->
+            cameraProviderFuture.addListener({
+                val cameraProvider = cameraProviderFuture.get()
+                val preview = Preview.Builder()
+                    .setTargetAspectRatio(AspectRatio.RATIO_4_3)
+                    .build().also {
+                        it.setSurfaceProvider(view.surfaceProvider)
+                    }
+                
+                imageCapture = ImageCapture.Builder()
+                    .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
+                    .setFlashMode(flashMode)
+                    .build()
+                
+                val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
+                
+                try {
+                    cameraProvider.unbindAll()
+                    camera = cameraProvider.bindToLifecycle(
+                        lifecycleOwner,
+                        cameraSelector,
+                        preview,
+                        imageCapture
+                    )
+                    camera?.cameraControl?.setExposureCompensationIndex(exposureCompensation.roundToInt())
+                } catch (e: Exception) {
+                    Log.e("Camera", "Use case binding failed", e)
+                }
+            }, ContextCompat.getMainExecutor(context))
+        }
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
         AndroidView(
             factory = { ctx ->
                 val view = PreviewView(ctx)
+                view.scaleType = PreviewView.ScaleType.FILL_CENTER
+                previewView = view
 
                 cameraProviderFuture.addListener({
                     val cameraProvider = cameraProviderFuture.get()
 
-                    val preview = Preview.Builder().build().also {
-                        it.setSurfaceProvider(view.surfaceProvider)
-                    }
+                    val preview = Preview.Builder()
+                        .setTargetAspectRatio(AspectRatio.RATIO_4_3)
+                        .build().also {
+                            it.setSurfaceProvider(view.surfaceProvider)
+                        }
 
                     imageCapture = ImageCapture.Builder()
                         .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
@@ -251,17 +301,17 @@ fun CameraScreen(
 
             Button(
                 onClick = {
-                    val imgCapture = imageCapture ?: return@Button
-                    
                     when (captureMode) {
                         CaptureMode.JPEG -> {
-                            captureJPEG(imgCapture, context, cameraExecutor, onPhotoTaken)
+                            val imgCapture = imageCapture ?: return@Button
+                            captureJPEG(imgCapture, context, cameraExecutor, exposureCompensation.roundToInt(), flashMode, onPhotoTaken)
                         }
                         CaptureMode.RAW -> {
-                            captureRAW(imgCapture, context, cameraExecutor, onPhotoTaken)
+                            captureRAW(context, cameraExecutor, exposureCompensation.roundToInt(), flashMode, onPhotoTaken)
                         }
                         CaptureMode.RAW_AND_JPEG -> {
-                            captureRAWAndJPEG(imgCapture, context, cameraExecutor, onPhotoTaken)
+                            val imgCapture = imageCapture ?: return@Button
+                            captureRAWAndJPEG(imgCapture, context, cameraExecutor, exposureCompensation.roundToInt(), flashMode, onPhotoTaken)
                         }
                     }
                 },
@@ -286,26 +336,16 @@ enum class CaptureMode {
     RAW_AND_JPEG
 }
 
-fun checkRawSupport(camera: Camera): Boolean {
-    return try {
-        val cameraInfo = camera.cameraInfo
-        val isBackCamera = cameraInfo.cameraSelector?.lensFacing == CameraSelector.LENS_FACING_BACK
-        
-        if (!isBackCamera) {
-            return false
-        }
-        
-        true
-    } catch (e: Exception) {
-        Log.e("Camera", "Error checking RAW support, assuming supported", e)
-        true
-    }
+fun checkRawSupport(context: Context, camera: Camera): Boolean {
+    return checkRawSupportWithCamera2(context, camera)
 }
 
 fun captureJPEG(
     imageCapture: ImageCapture,
     context: android.content.Context,
     executor: java.util.concurrent.ExecutorService,
+    exposureCompensation: Int = 0,
+    flashMode: Int = ImageCapture.FLASH_MODE_AUTO,
     onPhotoTaken: () -> Unit
 ) {
     val name = SimpleDateFormat("yyyy-MM-dd-HH-mm-ss-SSS", Locale.US)
@@ -324,6 +364,8 @@ fun captureJPEG(
         MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
         contentValues
     ).build()
+
+    imageCapture.flashMode = flashMode
 
     imageCapture.takePicture(
         outputOptions,
@@ -349,9 +391,10 @@ fun captureJPEG(
 }
 
 fun captureRAW(
-    imageCapture: ImageCapture,
     context: android.content.Context,
     executor: java.util.concurrent.ExecutorService,
+    exposureCompensation: Int = 0,
+    flashMode: Int = ImageCapture.FLASH_MODE_AUTO,
     onPhotoTaken: () -> Unit
 ) {
     val name = SimpleDateFormat("yyyy-MM-dd-HH-mm-ss-SSS", Locale.US)
@@ -360,43 +403,75 @@ fun captureRAW(
     try {
         val contentValues = ContentValues().apply {
             put(MediaStore.MediaColumns.DISPLAY_NAME, "${name}_RAW.dng")
-            put(MediaStore.MediaColumns.MIME_TYPE, "application/x-adobe-dng")
+            put(MediaStore.MediaColumns.MIME_TYPE, "image/dng")
             if(Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/CameraApp/RAW")
             }
         }
 
-        val outputOptions = ImageCapture.OutputFileOptions.Builder(
-            context.contentResolver,
+        val uri = context.contentResolver.insert(
             MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
             contentValues
-        ).build()
+        )
 
-        Log.d("Camera", "Attempting RAW capture with ImageCapture")
-        Log.d("Camera", "ImageCapture flash mode: ${imageCapture.flashMode}")
+        if (uri == null) {
+            Log.e("Camera", "Failed to create MediaStore entry for RAW")
+            ContextCompat.getMainExecutor(context).execute {
+                Toast.makeText(context, "RAW拍摄失败: 无法创建文件", Toast.LENGTH_SHORT).show()
+            }
+            return
+        }
+
+        val tempFile = java.io.File.createTempFile("raw_", ".dng", context.cacheDir)
+
+        val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+        val cameraIds = cameraManager.cameraIdList
         
-        imageCapture.takePicture(
-            outputOptions,
-            executor,
-            object : ImageCapture.OnImageSavedCallback {
-                override fun onError(exc: ImageCaptureException) {
-                    Log.e("Camera", "RAW capture failed: ${exc.message}", exc)
-                    Log.e("Camera", "RAW capture error code: ${exc.imageCaptureError}")
-                    ContextCompat.getMainExecutor(context).execute {
-                        Toast.makeText(context, "RAW拍摄失败: ${exc.message}", Toast.LENGTH_SHORT).show()
-                    }
-                }
+        var backCameraId: String? = null
+        for (cameraId in cameraIds) {
+            val characteristics = cameraManager.getCameraCharacteristics(cameraId)
+            val facing = characteristics.get(android.hardware.camera2.CameraCharacteristics.LENS_FACING)
+            if (facing == android.hardware.camera2.CameraMetadata.LENS_FACING_BACK) {
+                backCameraId = cameraId
+                break
+            }
+        }
 
-                override fun onImageSaved(output: ImageCapture.OutputFileResults) {
-                    val savedUri = output.savedUri
-                    Log.i("Camera", "RAW saved to: $savedUri")
+        if (backCameraId == null) {
+            Log.e("Camera", "No back camera found")
+            ContextCompat.getMainExecutor(context).execute {
+                Toast.makeText(context, "RAW拍摄失败: 未找到后置摄像头", Toast.LENGTH_SHORT).show()
+            }
+            return
+        }
+
+        captureRAWWithCamera2(context, cameraManager, backCameraId, tempFile, exposureCompensation, flashMode) { success ->
+            if (success) {
+                try {
+                    context.contentResolver.openOutputStream(uri)?.use { output ->
+                        tempFile.inputStream().use { input ->
+                            input.copyTo(output)
+                        }
+                    }
+                    tempFile.delete()
+                    Log.d("Camera", "RAW data copied to MediaStore")
                     ContextCompat.getMainExecutor(context).execute {
                         Toast.makeText(context, "RAW已保存", Toast.LENGTH_SHORT).show()
                         onPhotoTaken()
                     }
+                } catch (e: Exception) {
+                    Log.e("Camera", "Error copying RAW to MediaStore", e)
+                    ContextCompat.getMainExecutor(context).execute {
+                        Toast.makeText(context, "RAW保存失败: ${e.message}", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            } else {
+                tempFile.delete()
+                ContextCompat.getMainExecutor(context).execute {
+                    Toast.makeText(context, "RAW拍摄失败", Toast.LENGTH_SHORT).show()
                 }
             }
-        )
+        }
     } catch (e: Exception) {
         Log.e("Camera", "RAW capture error: ${e.message}", e)
         ContextCompat.getMainExecutor(context).execute {
@@ -409,6 +484,8 @@ fun captureRAWAndJPEG(
     imageCapture: ImageCapture,
     context: android.content.Context,
     executor: java.util.concurrent.ExecutorService,
+    exposureCompensation: Int = 0,
+    flashMode: Int = ImageCapture.FLASH_MODE_AUTO,
     onPhotoTaken: () -> Unit
 ) {
     val timestamp = SimpleDateFormat("yyyy-MM-dd-HH-mm-ss-SSS", Locale.US)
@@ -430,7 +507,7 @@ fun captureRAWAndJPEG(
 
     val rawContentValues = ContentValues().apply {
         put(MediaStore.MediaColumns.DISPLAY_NAME, "${rawName}.dng")
-        put(MediaStore.MediaColumns.MIME_TYPE, "application/x-adobe-dng")
+        put(MediaStore.MediaColumns.MIME_TYPE, "image/dng")
         if(Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/CameraApp/RAW")
         }
@@ -442,11 +519,43 @@ fun captureRAWAndJPEG(
         jpegContentValues
     ).build()
 
-    val rawOutputOptions = ImageCapture.OutputFileOptions.Builder(
-        context.contentResolver,
+    val rawUri = context.contentResolver.insert(
         MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
         rawContentValues
-    ).build()
+    )
+
+    if (rawUri == null) {
+        Log.e("Camera", "Failed to create MediaStore entry for RAW")
+        ContextCompat.getMainExecutor(context).execute {
+            Toast.makeText(context, "RAW拍摄失败: 无法创建文件", Toast.LENGTH_SHORT).show()
+        }
+        return
+    }
+
+    val rawTempFile = java.io.File.createTempFile("raw_", ".dng", context.cacheDir)
+
+    val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+    val cameraIds = cameraManager.cameraIdList
+    
+    var backCameraId: String? = null
+    for (cameraId in cameraIds) {
+        val characteristics = cameraManager.getCameraCharacteristics(cameraId)
+        val facing = characteristics.get(android.hardware.camera2.CameraCharacteristics.LENS_FACING)
+        if (facing == android.hardware.camera2.CameraMetadata.LENS_FACING_BACK) {
+            backCameraId = cameraId
+            break
+        }
+    }
+
+    if (backCameraId == null) {
+        Log.e("Camera", "No back camera found")
+        ContextCompat.getMainExecutor(context).execute {
+            Toast.makeText(context, "RAW拍摄失败: 未找到后置摄像头", Toast.LENGTH_SHORT).show()
+        }
+        return
+    }
+
+    imageCapture.flashMode = flashMode
 
     imageCapture.takePicture(
         jpegOutputOptions,
@@ -473,20 +582,15 @@ fun captureRAWAndJPEG(
         }
     )
 
-    imageCapture.takePicture(
-        rawOutputOptions,
-        executor,
-        object : ImageCapture.OnImageSavedCallback {
-            override fun onError(exc: ImageCaptureException) {
-                Log.e("Camera", "RAW capture failed: ${exc.message}", exc)
-                ContextCompat.getMainExecutor(context).execute {
-                    Toast.makeText(context, "RAW拍摄失败", Toast.LENGTH_SHORT).show()
+    captureRAWWithCamera2(context, cameraManager, backCameraId, rawTempFile, exposureCompensation, flashMode) { success ->
+        if (success) {
+            try {
+                context.contentResolver.openOutputStream(rawUri)?.use { output ->
+                    rawTempFile.inputStream().use { input ->
+                        input.copyTo(output)
+                    }
                 }
-            }
-
-            override fun onImageSaved(output: ImageCapture.OutputFileResults) {
-                val savedUri = output.savedUri
-                Log.i("Camera", "RAW saved to: $savedUri")
+                rawTempFile.delete()
                 rawSaved = true
                 if (jpegSaved && rawSaved) {
                     ContextCompat.getMainExecutor(context).execute {
@@ -494,7 +598,323 @@ fun captureRAWAndJPEG(
                         onPhotoTaken()
                     }
                 }
+            } catch (e: Exception) {
+                Log.e("Camera", "Error copying RAW to MediaStore", e)
+                rawTempFile.delete()
+                ContextCompat.getMainExecutor(context).execute {
+                    Toast.makeText(context, "RAW保存失败: ${e.message}", Toast.LENGTH_SHORT).show()
+                }
+            }
+        } else {
+            rawTempFile.delete()
+            ContextCompat.getMainExecutor(context).execute {
+                Toast.makeText(context, "RAW拍摄失败", Toast.LENGTH_SHORT).show()
             }
         }
-    )
+    }
+}
+
+class Camera2RawCaptureManager(
+    private val context: Context,
+    private val cameraManager: CameraManager
+) {
+    private var cameraDevice: CameraDevice? = null
+    var captureSession: CameraCaptureSession? = null
+    var backgroundHandler: Handler? = null
+    private var backgroundThread: HandlerThread? = null
+    private var rawSurface: Surface? = null
+    private var jpegSurface: Surface? = null
+
+    fun startBackgroundThread() {
+        backgroundThread = HandlerThread("CameraBackground").also { it.start() }
+        backgroundHandler = Handler(backgroundThread?.looper!!)
+    }
+
+    fun stopBackgroundThread() {
+        backgroundThread?.quitSafely()
+        try {
+            backgroundThread?.join()
+            backgroundThread = null
+        } catch (e: InterruptedException) {
+            Log.e("Camera2Raw", "Error stopping background thread", e)
+        }
+    }
+
+    fun checkRawSupport(cameraId: String): Boolean {
+        return try {
+            val characteristics = cameraManager.getCameraCharacteristics(cameraId)
+            val capabilities = characteristics.get(android.hardware.camera2.CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)
+            capabilities?.contains(android.hardware.camera2.CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_RAW) == true
+        } catch (e: CameraAccessException) {
+            Log.e("Camera2Raw", "Error checking RAW support", e)
+            false
+        }
+    }
+
+    fun openCamera(cameraId: String, surface: Surface, jpegSurface: Surface?, callback: (CameraDevice) -> Unit) {
+        try {
+            this.rawSurface = surface
+            this.jpegSurface = jpegSurface
+            
+            cameraManager.openCamera(cameraId, object : CameraDevice.StateCallback() {
+                override fun onOpened(camera: CameraDevice) {
+                    cameraDevice = camera
+                    callback(camera)
+                }
+
+                override fun onDisconnected(camera: CameraDevice) {
+                    camera.close()
+                    cameraDevice = null
+                }
+
+                override fun onError(camera: CameraDevice, error: Int) {
+                    camera.close()
+                    cameraDevice = null
+                    Log.e("Camera2Raw", "Camera error: $error")
+                }
+            }, backgroundHandler)
+        } catch (e: CameraAccessException) {
+            Log.e("Camera2Raw", "Error opening camera", e)
+        }
+    }
+
+    fun createCaptureSession(surfaces: List<Surface>, callback: () -> Unit) {
+        try {
+            cameraDevice?.createCaptureSession(surfaces, object : CameraCaptureSession.StateCallback() {
+                override fun onConfigured(session: CameraCaptureSession) {
+                    captureSession = session
+                    callback()
+                }
+
+                override fun onConfigureFailed(session: CameraCaptureSession) {
+                    Log.e("Camera2Raw", "Capture session configuration failed")
+                }
+            }, backgroundHandler)
+        } catch (e: CameraAccessException) {
+            Log.e("Camera2Raw", "Error creating capture session", e)
+        }
+    }
+
+    fun captureRAW(
+        rawSurface: Surface,
+        onComplete: (TotalCaptureResult) -> Unit
+    ) {
+        try {
+            val requestBuilder = cameraDevice?.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE)
+            requestBuilder?.addTarget(rawSurface)
+            requestBuilder?.set(CaptureRequest.JPEG_QUALITY, 100)
+            
+            captureSession?.capture(
+                requestBuilder?.build()!!,
+                object : CameraCaptureSession.CaptureCallback() {
+                    override fun onCaptureCompleted(
+                        session: CameraCaptureSession,
+                        request: CaptureRequest,
+                        result: TotalCaptureResult
+                    ) {
+                        Log.d("Camera2Raw", "RAW capture completed")
+                        onComplete(result)
+                    }
+
+                    override fun onCaptureFailed(
+                        session: CameraCaptureSession,
+                        request: CaptureRequest,
+                        failure: android.hardware.camera2.CaptureFailure
+                    ) {
+                        Log.e("Camera2Raw", "RAW capture failed")
+                    }
+                },
+                backgroundHandler
+            )
+        } catch (e: Exception) {
+            Log.e("Camera2Raw", "Error capturing RAW", e)
+        }
+    }
+
+    fun close() {
+        captureSession?.close()
+        cameraDevice?.close()
+        rawSurface?.release()
+        jpegSurface?.release()
+        stopBackgroundThread()
+    }
+}
+
+fun captureRAWWithCamera2(
+    context: Context,
+    cameraManager: CameraManager,
+    cameraId: String,
+    outputFile: java.io.File,
+    exposureCompensation: Int = 0,
+    flashMode: Int = ImageCapture.FLASH_MODE_AUTO,
+    onComplete: (Boolean) -> Unit
+) {
+    val manager = Camera2RawCaptureManager(context, cameraManager)
+    val handlerThread = HandlerThread("RAWHandler")
+    handlerThread.start()
+    val handler = Handler(handlerThread.looper)
+    
+    try {
+        manager.startBackgroundThread()
+        
+        val characteristics = cameraManager.getCameraCharacteristics(cameraId)
+        val configs = characteristics.get(android.hardware.camera2.CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+        val rawSizes = configs?.getOutputSizes(ImageFormat.RAW_SENSOR)
+        
+        if (rawSizes == null || rawSizes.isEmpty()) {
+            Log.e("Camera2Raw", "No RAW sizes available")
+            onComplete(false)
+            handlerThread.quitSafely()
+            return
+        }
+        
+        val rawSize = rawSizes[0]
+        val rawReader = ImageReader.newInstance(
+            rawSize.width,
+            rawSize.height,
+            ImageFormat.RAW_SENSOR,
+            1
+        )
+        
+        var captureResult: TotalCaptureResult? = null
+        var rawImage: android.media.Image? = null
+        
+        rawReader.setOnImageAvailableListener(object : ImageReader.OnImageAvailableListener {
+            override fun onImageAvailable(reader: ImageReader) {
+                rawImage = reader.acquireLatestImage()
+                val result = captureResult
+                if (rawImage != null && result != null) {
+                    try {
+                        val dngCreator = DngCreator(characteristics, result)
+                        
+                        outputFile.outputStream().use { outputStream ->
+                            dngCreator.writeImage(outputStream, rawImage!!)
+                        }
+                        
+                        Log.d("Camera2Raw", "DNG file saved to ${outputFile.absolutePath}")
+                        onComplete(true)
+                    } catch (e: Exception) {
+                        Log.e("Camera2Raw", "Error saving DNG file", e)
+                        onComplete(false)
+                    } finally {
+                        rawImage?.close()
+                        rawReader.close()
+                        manager.close()
+                        handlerThread.quitSafely()
+                    }
+                }
+            }
+        }, handler)
+        
+        manager.openCamera(cameraId, rawReader.surface, null) { camera ->
+            manager.createCaptureSession(listOf(rawReader.surface)) {
+                try {
+                    val aeCompRange = characteristics.get(
+                        android.hardware.camera2.CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE
+                    )
+                    val aeCompStep = characteristics.get(
+                        android.hardware.camera2.CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP
+                    )
+                    
+                    val isAeCompSupported = aeCompRange != null
+                    
+                    Log.d("Camera2Exposure", "AE补偿范围: $aeCompRange")
+                    Log.d("Camera2Exposure", "AE补偿步长: $aeCompStep")
+                    Log.d("Camera2Exposure", "支持AE补偿: $isAeCompSupported")
+                    
+                    val requestBuilder = camera.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
+                        addTarget(rawReader.surface)
+                        
+                        set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+                        
+                        when (flashMode) {
+                            ImageCapture.FLASH_MODE_AUTO -> {
+                                set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON_AUTO_FLASH)
+                            }
+                            ImageCapture.FLASH_MODE_ON -> {
+                                set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_SINGLE)
+                            }
+                            ImageCapture.FLASH_MODE_OFF -> {
+                                set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_OFF)
+                            }
+                        }
+                        
+                        if (isAeCompSupported) {
+                            val evValue = exposureCompensation.coerceIn(aeCompRange!!.lower, aeCompRange!!.upper)
+                            set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, evValue)
+                            Log.d("Camera2Exposure", "设置曝光补偿: $evValue")
+                        }
+                        
+                        set(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_OFF)
+                        set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_OFF)
+                        
+                        set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
+                    }
+                    
+                    manager.captureSession?.capture(
+                        requestBuilder.build(),
+                        object : CameraCaptureSession.CaptureCallback() {
+                            override fun onCaptureCompleted(
+                                session: CameraCaptureSession,
+                                request: CaptureRequest,
+                                result: TotalCaptureResult
+                            ) {
+                                captureResult = result
+                                Log.d("Camera2RAW", "RAW捕获完成，曝光状态: ${result.get(CaptureResult.CONTROL_AE_STATE)}")
+                            }
+
+                            override fun onCaptureFailed(
+                                session: CameraCaptureSession,
+                                request: CaptureRequest,
+                                failure: android.hardware.camera2.CaptureFailure
+                            ) {
+                                Log.e("Camera2RAW", "RAW捕获失败")
+                            }
+                        },
+                        manager.backgroundHandler
+                    )
+                } catch (e: Exception) {
+                    Log.e("Camera2Exposure", "设置曝光失败", e)
+                }
+            }
+        }
+    } catch (e: Exception) {
+        Log.e("Camera2RAW", "RAW捕获错误", e)
+        onComplete(false)
+        handlerThread.quitSafely()
+    }
+}
+
+fun checkRawSupportWithCamera2(
+    context: Context,
+    camera: Camera
+): Boolean {
+    return try {
+        val cameraInfo = camera.cameraInfo
+        val isBackCamera = cameraInfo.cameraSelector?.lensFacing == CameraSelector.LENS_FACING_BACK
+        
+        if (!isBackCamera) {
+            return false
+        }
+        
+        val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+        val cameraIds = cameraManager.cameraIdList
+        
+        for (cameraId in cameraIds) {
+            val characteristics = cameraManager.getCameraCharacteristics(cameraId)
+            val facing = characteristics.get(android.hardware.camera2.CameraCharacteristics.LENS_FACING)
+            
+            if (facing == android.hardware.camera2.CameraMetadata.LENS_FACING_BACK) {
+                val capabilities = characteristics.get(android.hardware.camera2.CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)
+                val isRawSupported = capabilities?.contains(android.hardware.camera2.CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_RAW) == true
+                Log.d("Camera2Raw", "Camera $cameraId RAW support: $isRawSupported")
+                return isRawSupported
+            }
+        }
+        
+        false
+    } catch (e: Exception) {
+        Log.e("Camera2Raw", "Error checking RAW support", e)
+        false
+    }
 }
