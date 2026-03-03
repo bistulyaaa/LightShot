@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Bundle
 import android.util.Log
+import android.view.KeyEvent
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -16,6 +17,7 @@ import androidx.core.content.ContextCompat
 import com.example.testandlearn01.presentation.ui.CameraScreen
 import com.example.testandlearn01.GalleryScreen
 import com.example.testandlearn01.ui.theme.TestAndLearn01Theme
+import com.example.testandlearn01.util.VolumeKeyShutter
 import com.google.common.util.concurrent.ListenableFuture
 import kotlinx.coroutines.launch
 import java.util.concurrent.ExecutorService
@@ -61,6 +63,19 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         super.onDestroy()
         cameraExecutor.shutdown()
+    }
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (event.action == KeyEvent.ACTION_DOWN) {
+            when (event.keyCode) {
+                KeyEvent.KEYCODE_VOLUME_UP,
+                KeyEvent.KEYCODE_VOLUME_DOWN -> {
+                    VolumeKeyShutter.triggerCapture()
+                    return true
+                }
+            }
+        }
+        return super.dispatchKeyEvent(event)
     }
 }
 

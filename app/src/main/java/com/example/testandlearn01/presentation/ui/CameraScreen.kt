@@ -38,6 +38,7 @@ import com.example.testandlearn01.domain.model.CaptureResult
 import com.example.testandlearn01.domain.repository.CameraRepository
 import com.example.testandlearn01.presentation.ui.components.CameraControls
 import com.example.testandlearn01.presentation.viewmodel.CameraViewModel
+import com.example.testandlearn01.util.VolumeKeyShutter
 import com.google.common.util.concurrent.ListenableFuture
 import kotlinx.coroutines.launch
 
@@ -63,6 +64,13 @@ fun CameraScreen(
 
     val cameraState by viewModel.cameraState.collectAsState()
     val captureResult by viewModel.captureResult.collectAsState()
+    val volumeTrigger by VolumeKeyShutter.trigger.collectAsState()
+
+    LaunchedEffect(volumeTrigger) {
+        if (volumeTrigger > 0 && !cameraState.isCapturing) {
+            viewModel.capturePhoto()
+        }
+    }
 
     // 使用remember确保PreviewView只创建一次
     val previewView = remember {

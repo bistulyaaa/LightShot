@@ -1,98 +1,352 @@
+# LightShot - 轻简相机
 
-这是一个还未完工的轻量化相机app，旨在超越手机的原生相机。
+一个为**极致抓拍**而生的轻量化 Android 相机应用。
 
-以软件响应速度为第一目标，目的是更快的抓拍。
+## 项目概述
 
-还有，你是否已经厌倦了曾经被吹上天的计算摄影？LightShot是没有任何计算摄影的。
+| 属性 | 值 |
+|------|-----|
+| **应用名称** | 轻简相机 (LightShot) |
+| **包名** | com.example.testandlearn01 |
+| **版本** | 1.4.1-260206 |
+| **最低SDK** | Android 7.0 (API 24) |
+| **目标SDK** | Android 14 (API 36) |
+| **开发语言** | Kotlin |
+| **UI框架** | Jetpack Compose |
 
-相比较于其它的开源相机app，这个应该是兼容性更好然后启动/抓拍速度更快（比如说hedgecam2我用起来有比较长的快门延迟）。
-
-此款软件是站在一名摄影爱好者的角度开发的，全程都使用AI，目前我本人是读不懂这些代码的，所以很多地方写的并不好。
-
-
-*写不下去了*
-
-以下是为你构思的完整 README 内容，你可以直接复制到项目的 `README.md` 中：
-
----
-
-# 📸 LightShot
-
-这是一个为**极致抓拍**而生的轻量化 Android 相机应用。
-
-### 🚀 开发愿景
+### 开发愿景
 
 在现代智能手机中，原生相机应用正变得越来越臃肿。复杂的计算摄影算法、繁琐的模式切换以及日益增加的启动延迟，让很多珍贵的瞬间在等待中流逝。**LightShot 的目标只有一个：在按下图标后的毫秒级时间内，为你捕捉到最真实、最清晰的瞬间。**
 
-相比于 HedgeCam2 等老牌开源相机，LightShot 走的是一条**现代化且极致精简**的路线。
+### 核心特色
+
+- **瞬时响应**: 优化相机初始化时机，实现比原生相机更快的预览启动速度
+- **零计算摄影**: 抛弃过度修饰的后处理算法，还原传感器最原始的数据
+- **现代UI**: 完全基于 Jetpack Compose 构建，Material 3 设计
+- **专业输出**: 支持 JPEG 与 14-bit RAW (DNG) 格式
+- **音量键快门**: 支持音量键拍照，抓拍更便捷
 
 ---
 
-### 🌟 核心特色
+## 项目结构
 
-* **瞬时响应 (Speed-First)**：通过优化 `ProcessCameraProvider` 的初始化时机，将硬件握手提前，实现比原生相机更快的预览启动速度。
-* **计算摄影裁剪 (Zero Latency)**：抛弃了过度修饰的后处理算法，还原传感器最原始的数据，确保快门零延迟。
-* **现代 UI 架构**：完全基于 **Jetpack Compose** 构建，拥有比传统 XML 布局更快的渲染效率和更丝滑的交互体验。
-* **极小体积**：在保持强大功能的同时，通过 R8/ProGuard 极致瘦身，Release 包仅约 8MB。
-* **专业级输出**：支持全像素 JPEG 与 14-bit RAW (DNG) 格式并行存储，为后期留足空间。
-
----
-
-### ⚔️ 相比于其他开源软件 (如 HedgeCam2)
-
-| 特性 | HedgeCam2 / Open Camera | **LightShot (本项目)** |
-| --- | --- | --- |
-| **交互设计** | 菜单层级深，操作复杂 | **极简交互，单手盲操优化** |
-| **启动逻辑** | 传统串行初始化 | **异步并发预加载，响应更快** |
-| **视觉体验** | 较旧的 Android View 风格 | **Material 3 响应式动效** |
-| **维护性** | 沉重的底层 C++ 兼容层 | **轻量级 CameraX 现代化架构** |
-
----
-
-### 🛠️ 技术栈
-
-* **Language**: Kotlin
-* **UI**: Jetpack Compose (Material 3)
-* **Core**: CameraX (Jetpack Camera library)
-* **Concurrency**: Kotlin Coroutines & Flow
-* **Architecture**: MVVM + Clean Architecture (初步重构完成)
-
----
-
-### 📅 开发进度 (Roadmap)
-
-* [x] 基于 CameraX 的基础拍摄流程
-* [x] 多场景适配的分辨率策略 (4K/RAW)
-* [x] 代码模块化重构 (多文件分离)
-* [x] Release 版本体积与性能优化
-* [ ] **Next**: 实时直方图与曝光补偿快捷控制
-* [ ] **Next**: 零快门延迟 (ZSL) 技术深度集成
-* [ ] **Next**: 自定义文件存储命名规则
-
----
-
-### 📥 安装测试
-
-1. 在 `Releases` 页面下载最新的 `app-release.apk`。
-2. 确保你的设备支持 Camera2 API（建议 Android 10.0+）。
-3. **注意**：由于是个人开发者签名，安装时若弹出安全提示，请点击“仍要安装”。
+```
+app/src/main/java/com/example/testandlearn01/
+├── MainActivity.kt              # 应用入口，权限处理，音量键监听
+├── GalleryScreen.kt             # 相册界面
+├── PhotoUtils.kt                # 照片加载工具
+│
+├── data/                        # 数据层
+│   └── camera/
+│       ├── CameraRepositoryImpl.kt      # 相机仓库实现（核心功能）
+│       └── Camera2RawCaptureManager.kt  # Camera2 RAW捕获管理
+│
+├── di/                          # 依赖注入
+│   └── CameraModule.kt          # Hilt模块（待配置）
+│
+├── domain/                      # 领域层
+│   ├── model/
+│   │   └── CameraModels.kt      # 数据模型定义
+│   └── repository/
+│       └── CameraRepository.kt  # 仓库接口定义
+│
+├── presentation/                # 表现层
+│   ├── ui/
+│   │   ├── CameraScreen.kt      # 相机主界面
+│   │   └── components/
+│   │       ├── CameraControls.kt    # 相机控制组件
+│   │       └── CameraPreview.kt     # 相机预览组件
+│   └── viewmodel/
+│       └── CameraViewModel.kt   # 相机状态管理
+│
+├── ui/                          # UI主题
+│   └── theme/
+│       ├── Color.kt
+│       ├── Theme.kt
+│       └── Type.kt
+│
+└── util/                        # 工具类
+    └── VolumeKeyShutter.kt      # 音量键快门功能
+```
 
 ---
 
-### 🤝 贡献与反馈
+## 架构设计
 
-如果你也是追求“极速拍摄”的开发者，欢迎提交 Issue 或 Pull Request。
+项目采用 **MVVM + Clean Architecture** 架构模式：
 
-> **开发者寄语**：
-> “原生相机给你的也许是‘好照片’，但 LightShot 给你的是‘拍得到’。”
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Presentation Layer                        │
+│  ┌─────────────────┐    ┌─────────────────────────────────┐ │
+│  │   CameraScreen  │    │       CameraViewModel           │ │
+│  │   GalleryScreen │◄───│  (状态管理、业务逻辑协调)         │ │
+│  │   Components    │    └─────────────────────────────────┘ │
+│  └─────────────────┘                   │                     │
+└─────────────────────────────────────────┼───────────────────┘
+                                          │
+┌─────────────────────────────────────────┼───────────────────┐
+│                         Domain Layer    │                    │
+│  ┌──────────────────────┐    ┌──────────▼────────────────┐  │
+│  │   CameraRepository   │    │      CameraModels         │  │
+│  │     (接口定义)        │    │  CameraState, CaptureMode │  │
+│  └──────────────────────┘    │  FlashMode, CaptureResult │  │
+│          ▲                   └───────────────────────────┘  │
+└──────────┼──────────────────────────────────────────────────┘
+           │
+┌──────────┼──────────────────────────────────────────────────┐
+│          │         Data Layer                                │
+│  ┌───────┴──────────────────┐    ┌────────────────────────┐  │
+│  │  CameraRepositoryImpl    │    │ Camera2RawCaptureMgr   │  │
+│  │  (相机功能实现)           │◄───│  (Camera2 RAW捕获)      │  │
+│  └──────────────────────────┘    └────────────────────────┘  │
+└──────────────────────────────────────────────────────────────┘
+```
+
+### 数据流
+
+```
+用户操作 → CameraScreen → CameraViewModel → CameraRepository → CameraX/Camera2 API
+                                    ↓
+                            StateFlow状态更新
+                                    ↓
+                            CameraScreen UI重组
+```
 
 ---
 
-### 💡 写给你的小贴士：
+## 核心模块说明
 
-* **README 的灵魂是截图**：如果你能放一张 App 的截图（哪怕只是个预览界面），会瞬间提升项目的可信度。
-* **强调“学生/独立开发”**：在 README 里诚恳地说明这是一个实验性项目，反而会吸引很多愿意提建议的技术大牛。
+### 1. 相机模块 (Camera)
 
-**既然 README 已经写好了，需要我帮你把“实时直方图”或者“曝光补偿”的代码框架写出来，作为你 1.2.0 版本的更新内容吗？**
+| 文件 | 功能 |
+|------|------|
+| `CameraRepositoryImpl.kt` | 相机核心功能实现 |
+| `CameraViewModel.kt` | 相机状态管理 |
+| `CameraScreen.kt` | 相机界面 |
+| `CameraControls.kt` | 控制组件（曝光、闪光灯、快门） |
 
+### 2. 拍摄模式
 
+| 模式 | 说明 | 实现方法 |
+|------|------|----------|
+| **JPEG** | 标准JPEG格式拍摄 | `captureJPEG()` 使用 CameraX ImageCapture |
+| **RAW** | DNG原始格式拍摄 | `captureRAW()` 使用 Camera2 API |
+| **RAW+JPEG** | 双格式同时保存 | `captureRAWAndJPEG()` 并行捕获 |
+
+### 3. 相机控制功能
+
+| 功能 | 说明 | 实现位置 |
+|------|------|----------|
+| 闪光灯控制 | 自动/开启/关闭 | `setFlashMode()` |
+| 曝光补偿 | -6 到 +6 EV | `setExposureCompensation()` |
+| 触摸对焦 | 点击屏幕对焦 | `focusOnPoint()` |
+| 音量键快门 | 音量键触发拍照 | `VolumeKeyShutter` |
+
+### 4. 相册模块
+
+| 文件 | 功能 |
+|------|------|
+| `GalleryScreen.kt` | 照片网格展示、预览、删除 |
+| `PhotoUtils.kt` | MediaStore照片查询 |
+
+---
+
+## 数据模型
+
+### CameraState
+
+```kotlin
+data class CameraState(
+    val captureMode: CaptureMode = CaptureMode.JPEG,  // 拍摄模式
+    val flashMode: FlashMode = FlashMode.AUTO,        // 闪光灯模式
+    val exposureCompensation: Float = 0f,             // 曝光补偿
+    val isRawSupported: Boolean = false,              // RAW支持状态
+    val isCapturing: Boolean = false,                 // 拍摄中状态
+    val focusPoint: Pair<Float, Float>? = null        // 对焦点
+)
+```
+
+### 枚举定义
+
+```kotlin
+enum class CaptureMode { JPEG, RAW, RAW_AND_JPEG }
+enum class FlashMode { AUTO, ON, OFF }
+```
+
+### 拍摄结果
+
+```kotlin
+sealed class CaptureResult {
+    data class Success(val uri: Uri) : CaptureResult()
+    data class Error(val message: String) : CaptureResult()
+}
+```
+
+---
+
+## 技术栈
+
+### 核心技术
+
+| 技术 | 版本 | 用途 |
+|------|------|------|
+| Kotlin | 2.0.21 | 开发语言 |
+| Jetpack Compose | BOM 2024.09.00 | 声明式UI框架 |
+| Material 3 | - | 设计系统 |
+| CameraX | 1.4.0 | 相机功能核心 |
+| Coroutines & Flow | - | 异步与响应式 |
+
+### 主要依赖
+
+| 依赖 | 用途 |
+|------|------|
+| `androidx.camera:*` | 相机功能（预览、拍摄、生命周期） |
+| `androidx.lifecycle:*` | ViewModel、生命周期管理 |
+| `io.coil-kt:coil-compose` | 图片加载 |
+| `androidx.compose.material3` | Material 3 组件 |
+
+---
+
+## 开发指南
+
+### 环境要求
+
+- Android Studio Hedgehog 或更高版本
+- JDK 11+
+- Android SDK (minSdk 24, targetSdk 36)
+- Gradle 8.x
+
+### 构建项目
+
+```bash
+# 调试版本
+./gradlew assembleDebug
+
+# 发布版本
+./gradlew assembleRelease
+```
+
+### 代码规范
+
+1. **命名规范**
+   - 类名：大驼峰（PascalCase）
+   - 函数/变量：小驼峰（camelCase）
+   - 常量：全大写下划线分隔（UPPER_SNAKE_CASE）
+
+2. **Compose规范**
+   - Composable函数使用大驼峰命名
+   - 状态提升（State Hoisting）模式
+   - 单一职责原则
+
+3. **架构规范**
+   - ViewModel不持有Activity/Fragment引用
+   - Repository负责数据获取与缓存
+   - UseCase封装复杂业务逻辑
+
+### 添加新功能
+
+1. 在 `domain/model/` 定义数据模型
+2. 在 `domain/repository/` 定义接口
+3. 在 `data/` 实现接口
+4. 在 `presentation/viewmodel/` 添加ViewModel逻辑
+5. 在 `presentation/ui/` 实现UI
+
+---
+
+## 功能清单
+
+### 已实现
+
+- [x] 相机预览与基础拍摄
+- [x] JPEG格式拍摄
+- [x] RAW (DNG) 格式拍摄
+- [x] RAW+JPEG 双格式拍摄
+- [x] 闪光灯控制（自动/开/关）
+- [x] 曝光补偿（-6 到 +6 EV）
+- [x] 触摸对焦
+- [x] 音量键快门
+- [x] 相册浏览
+- [x] 照片删除
+
+### 开发中
+
+- [ ] 实时直方图
+- [ ] 零快门延迟 (ZSL)
+- [ ] 网格线辅助
+- [ ] 水平仪
+- [ ] 自定义存储路径
+
+---
+
+## 已知问题
+
+1. **Dagger Hilt 未配置**: `CameraModule.kt` 使用了 Hilt 注解但未在 `build.gradle.kts` 中配置 Hilt 插件
+2. **重复文件**: 存在 `CameraScreen.kt` 的重复定义
+
+### 修复 Hilt 配置
+
+在 `app/build.gradle.kts` 中添加：
+
+```kotlin
+plugins {
+    alias(libs.plugins.hilt)  // 需要在 libs.versions.toml 中添加版本
+}
+
+dependencies {
+    implementation(libs.hilt.android)
+    ksp(libs.hilt.compiler)
+}
+```
+
+---
+
+## 文件索引
+
+### 核心文件
+
+| 文件 | 路径 | 说明 |
+|------|------|------|
+| MainActivity | `MainActivity.kt` | 应用入口 |
+| CameraViewModel | `presentation/viewmodel/CameraViewModel.kt` | 相机状态管理 |
+| CameraRepositoryImpl | `data/camera/CameraRepositoryImpl.kt` | 相机功能实现 |
+| CameraScreen | `presentation/ui/CameraScreen.kt` | 相机界面 |
+| CameraControls | `presentation/ui/components/CameraControls.kt` | 控制组件 |
+| CameraModels | `domain/model/CameraModels.kt` | 数据模型 |
+
+### 配置文件
+
+| 文件 | 说明 |
+|------|------|
+| `app/build.gradle.kts` | 模块构建配置 |
+| `build.gradle.kts` | 项目构建配置 |
+| `settings.gradle.kts` | 项目设置、仓库配置 |
+| `gradle/libs.versions.toml` | 依赖版本目录 |
+| `AndroidManifest.xml` | 应用清单 |
+
+---
+
+## 贡献指南
+
+欢迎提交 Issue 和 Pull Request。
+
+### 提交规范
+
+```
+feat: 添加新功能
+fix: 修复bug
+docs: 文档更新
+refactor: 代码重构
+style: 代码格式调整
+test: 测试相关
+```
+
+---
+
+## 许可证
+
+本项目仅供学习交流使用。
+
+---
+
+> "原生相机给你的也许是'好照片'，但 LightShot 给你的是'拍得到'。"
